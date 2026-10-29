@@ -1,0 +1,10 @@
+# One-click hosting on Render (free plan): gives the game a public https link
+# that works on any phone, on any Wi-Fi or mobile data.
+services:
+  - type: web
+    name: chhupan-chhupai
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /

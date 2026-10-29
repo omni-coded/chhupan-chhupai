@@ -5,7 +5,13 @@ import { CATCH_RADIUS_M, MIN_PLAYERS, fmtDur, fmtMeters } from './game.js';
 export function rulesSummary(s) {
   return [
     `⏱ ${fmtDur(s.roundSec)} round`,
-    s.visibility === 'live' ? '🛰️ Everyone live on the map' : s.pingSec ? `📍 Chors pinged every ${fmtDur(s.pingSec)}` : '📍 Chors hidden, no pings',
+    s.visibility === 'flash'
+      ? `👀 Chors flash every ${fmtDur(s.flashEverySec)} for ${s.flashForSec}s${s.hints ? ' + hints' : ''}`
+      : s.visibility === 'live'
+        ? '🛰️ Everyone live on the map'
+        : s.pingSec
+          ? `📍 Chors pinged every ${fmtDur(s.pingSec)}`
+          : '📍 Chors hidden, no pings',
     `🔒 Caught within ${CATCH_RADIUS_M} m`,
     s.headStartSec ? `🏃 ${fmtDur(s.headStartSec)} head start` : '🏃 No head start',
     `⭕ ${fmtMeters(s.radius * 2)} zone${s.shrink ? ', shrinking' : ''}`,

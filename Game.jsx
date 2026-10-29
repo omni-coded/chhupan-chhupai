@@ -138,6 +138,9 @@ export default function Game({ room, me, isHost, send, offset, onLeave, status }
   const headstart = room.phase === 'headstart';
   const clock = headstart ? room.huntAt - now : room.phase === 'hunt' ? room.endAt - now : 0;
   const nextPing = room.phase === 'hunt' && room.nextPingAt ? room.nextPingAt - now : null;
+  const flashing = room.phase === 'hunt' && room.flashUntil > now;
+  const nextFlash = room.phase === 'hunt' && room.nextFlashAt ? room.nextFlashAt - now : null;
+  const hint = room.hint && !room.hint.none ? room.hint : null;
   const freeChors = room.players.filter((p) => p.team === CHOR && p.state === 'free');
   const hudCls = room.phase === 'over' ? 'over' : spectating ? 'spectate' : me.team;
   const roleLabel = spectating ? (me.state === 'out' ? 'Out · watching' : 'In jail · watching') : me.team === POLICE ? (me.switched ? 'Police (switched)' : 'Police') : 'Chor';
@@ -189,6 +192,12 @@ export default function Game({ room, me, isHost, send, offset, onLeave, status }
               <b className={danger ? 'hot' : ''}>{fmtMeters(nearest.d)}</b>
             </>
           )}
+          {nextFlash != null && (flashing || !nearest) && (
+            <>
+              <span className="hud-label">{flashing ? 'Flash' : 'Next flash'}</span>
+              <b className={flashing || nextFlash <= 5000 ? 'hot' : ''}>{flashing ? `👀 ${fmtClock(room.flashUntil - now)}` : fmtClock(nextFlash)}</b>
+            </>
+          )}
           {!nearest && nextPing != null && (
             <>
               <span className="hud-label">Next ping</span>
@@ -203,7 +212,7 @@ export default function Game({ room, me, isHost, send, offset, onLeave, status }
         </div>
       </div>
 
-      <div className="game-map">
+      <div className={`game-map ${flashing ? 'flashing' : ''}`}>
         <MapView
           center={room.zone || room.settings.center}
           zone={room.zone}
@@ -237,9 +246,28 @@ export default function Game({ room, me, isHost, send, offset, onLeave, status }
               ? `Police can see you LIVE! Back inside or you're out in ${fmtClock(OUT_AFTER_MS - outFor)}`
               : `Outside the zone! Get back in within ${fmtClock(OUT_AFTER_MS - outFor)}`}
           </div>
+        ) : me.state === 'free' && flashing ? (
+          <div className="banner danger">👀 Flash! Police can see you right now</div>
+        ) : me.state === 'free' && nextFlash != null && nextFlash <= 5000 ? (
+          <div className="banner">⏳ Flash in {Math.ceil(nextFlash / 1000)}… police will see you. Hide!</div>
         ) : danger && room.phase === 'hunt' ? (
           <div className="banner danger">{nearest.p.name} is {fmtMeters(nearest.d)} away!</div>
         ) : null}
+
+        {hint && sharing && me.team === POLICE && !flashing && (
+          <div className={`hint-card card ${hint.band}`}>
+            <span className="hint-arrow" style={{ transform: `rotate(${hint.angle}deg)` }}>
+              ⬆
+            </span>
+            <span>
+              <small>{{ hot: '🔥 Bahut garam!', warm: '♨️ Garam', near: '🙂 Paas hai', far: '🧊 Thanda', veryfar: '❄️ Bahut thanda' }[hint.band]}</small>
+              <b>
+                Nearest chor: {hint.dir}, {hint.range}
+              </b>
+              <small>Hint {Math.max(0, Math.round((now - hint.at) / 1000))}s old · new one every 15s</small>
+            </span>
+          </div>
+        )}
 
         {sharing && (gps === 'blocked' || gps === 'none' || (gps === 'waiting' && !myPos)) && (
           <div className="gps-card card">

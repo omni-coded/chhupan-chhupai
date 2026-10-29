@@ -23,12 +23,18 @@ export const STALE_MS = 15_000; // a position older than this doesn't count for 
 export const EXPOSE_AFTER_MS = 30_000; // pings mode: a chor outside the zone this long shows up live
 export const OUT_AFTER_MS = 120_000; // a chor outside the zone this long is out
 export const SPECTATE_DELAY_MS = 60_000;
+export const HINT_EVERY_MS = 15_000; // flash mode: police get a fresh direction hint this often
 export const TICK_MS = 500;
 export const DEFAULT_CENTER = { lat: 28.6129, lng: 77.2295 }; // India Gate, New Delhi
 
 export const DEFAULT_SETTINGS = {
   roundSec: 30 * 60,
-  visibility: 'live', // 'live': everyone sees everyone in real time; 'pings': police see chors only in pings
+  // 'flash': chors are hidden, police see them for a few seconds every so often (plus hints);
+  // 'live': everyone sees everyone in real time; 'pings': police see where chors were at each ping.
+  visibility: 'flash',
+  flashEverySec: 60, // flash mode: how often chors appear to police
+  flashForSec: 3, // flash mode: for how long
+  hints: true, // flash mode: direction and distance hints for police between flashes
   pingSec: 2 * 60, // pings mode only; 0 = no pings
   headStartSec: 2 * 60,
   center: null,
@@ -42,6 +48,8 @@ export const DEFAULT_SETTINGS = {
 export const LIMITS = {
   roundSec: [5 * 60, 3 * 3600],
   pingSec: [0, 30 * 60],
+  flashEverySec: [20, 10 * 60],
+  flashForSec: [1, 10],
   headStartSec: [0, 30 * 60],
   radius: [50, 1500],
 };
@@ -99,7 +107,10 @@ export function cleanSettings(input = {}, base = DEFAULT_SETTINGS) {
   s.radius = clamp(Math.round(s.radius), ...LIMITS.radius);
   s.finalRadius = clamp(Math.round(s.finalRadius), 25, s.radius);
   s.shrink = !!s.shrink;
-  if (!['live', 'pings'].includes(s.visibility)) s.visibility = 'live';
+  if (!['flash', 'live', 'pings'].includes(s.visibility)) s.visibility = 'flash';
+  s.flashEverySec = clamp(Math.round(s.flashEverySec), ...LIMITS.flashEverySec);
+  s.flashForSec = clamp(Math.round(s.flashForSec), ...LIMITS.flashForSec);
+  s.hints = s.hints !== false;
   if (!['spectate', 'switch'].includes(s.onJailed)) s.onJailed = 'spectate';
   if (!['delayed', 'live', 'off'].includes(s.spectate)) s.spectate = 'live';
   if (!s.center || !Number.isFinite(s.center.lat) || !Number.isFinite(s.center.lng)) s.center = { ...DEFAULT_CENTER };
@@ -337,6 +348,9 @@ export class GameServer {
     room.huntAt = now + s.headStartSec * 1000;
     room.endAt = room.huntAt + s.roundSec * 1000;
     room.nextPingAt = s.visibility === 'pings' && s.pingSec ? room.huntAt + s.pingSec * 1000 : null;
+    room.nextFlashAt = s.visibility === 'flash' ? room.huntAt + s.flashEverySec * 1000 : null;
+    room.flashUntil = 0;
+    room.hints = new Map();
     room.zone = { ...s.center, radius: s.radius };
     room.nextZone = null;
     room.shrinkPlan = s.shrink ? this.planShrink(room) : [];
@@ -483,6 +497,18 @@ export class GameServer {
       }
     }
 
+    // Flashes (flash mode): chors show up to police for a few seconds.
+    if (room.nextFlashAt && now >= room.nextFlashAt) {
+      room.flashUntil = now + s.flashForSec * 1000;
+      room.nextFlashAt = now + s.flashEverySec * 1000;
+      const n = this.freeChors(room).length;
+      for (const p of room.players.values()) {
+        if (p.team === POLICE) this.alert(room, p, { kind: 'ping', title: 'Flash! 👀 Look now!', body: `${n} chor${n === 1 ? '' : 's'} visible for ${s.flashForSec} seconds.` });
+        else if (p.state === 'free') this.alert(room, p, { kind: 'zone', title: 'Flash! Police can see you', body: `For ${s.flashForSec} seconds. Move after it ends!` });
+      }
+    }
+    if (s.visibility === 'flash' && s.hints) this.updateHints(room, now);
+
     // Shrinking zone
     const due = room.shrinkPlan.filter((z) => z.at <= now);
     if (due.length) {
@@ -521,13 +547,36 @@ export class GameServer {
         this.log(room, `${p.name} stayed outside the zone and is out`, 'out');
         this.alert(room, p, { kind: 'jailed', title: "You're out", body: 'Two minutes outside the zone. Better luck next round!' });
         this.checkWin(room);
-      } else if (s.visibility === 'pings' && now - p.outSince >= EXPOSE_AFTER_MS && !p.exposedWarned) {
+      } else if (s.visibility !== 'live' && now - p.outSince >= EXPOSE_AFTER_MS && !p.exposedWarned) {
         p.exposedWarned = true;
         this.alert(room, p, { kind: 'zone', title: 'Police can see you live!', body: 'Get back inside the zone, fast.' });
       }
     }
 
     if (room.phase === 'hunt' && now >= room.endAt) this.finish(room, 'time');
+  }
+
+  /**
+   * Flash mode: each police player gets a rough direction and distance to the nearest
+   * free chor, refreshed every HINT_EVERY_MS, so it guides without becoming live tracking.
+   */
+  updateHints(room, now) {
+    const chors = this.freeChors(room).filter((p) => p.pos);
+    for (const cop of room.players.values()) {
+      if (cop.team !== POLICE || cop.state !== 'hunting') continue;
+      const old = room.hints.get(cop.id);
+      if (old && !old.none && now - old.at < HINT_EVERY_MS) continue;
+      if (!cop.pos || !chors.length) {
+        room.hints.set(cop.id, { at: now, none: true });
+        continue;
+      }
+      let best = null;
+      for (const c of chors) {
+        const d = metersBetween(cop.pos, c.pos);
+        if (!best || d < best.d) best = { d, c };
+      }
+      room.hints.set(cop.id, { at: now, ...describeHint(cop.pos, best.c.pos, best.d) });
+    }
   }
 
   /** Any police within CATCH_RADIUS_M of a free chor, for CATCH_HOLD_MS, jails them. */
@@ -610,8 +659,9 @@ export class GameServer {
         if (s.visibility === 'live') {
           // Real-time mode: the other team's free players are on the map live.
           if (p.state === 'free' || p.state === 'hunting') show(p, 'live');
-        } else if (me.team === POLICE && p.state === 'free' && p.outSince && now - p.outSince >= EXPOSE_AFTER_MS) {
-          show(p, 'exposed');
+        } else if (me.team === POLICE && p.state === 'free') {
+          if (s.visibility === 'flash' && now < room.flashUntil) show(p, 'flash');
+          else if (p.outSince && now - p.outSince >= EXPOSE_AFTER_MS) show(p, 'exposed');
         }
       }
     }
@@ -632,6 +682,9 @@ export class GameServer {
       endAt: room.endAt,
       endedAt: room.endedAt,
       nextPingAt: room.nextPingAt,
+      nextFlashAt: room.phase === 'hunt' ? room.nextFlashAt : null,
+      flashUntil: room.phase === 'hunt' ? room.flashUntil : 0,
+      hint: room.phase === 'hunt' && me.team === POLICE && me.state === 'hunting' ? room.hints?.get(me.id) || null : null,
       zone: room.zone,
       nextZone: room.nextZone,
       players: players.map((p) => ({
@@ -656,6 +709,19 @@ export class GameServer {
       result: room.result,
     };
   }
+}
+
+const DIRECTIONS = ['North', 'North-East', 'East', 'South-East', 'South', 'South-West', 'West', 'North-West'];
+
+/** "~120 m, North-East": a compass direction (to 45°) and a distance band, never exact. */
+export function describeHint(from, to, d) {
+  const dy = (to.lat - from.lat) * M_PER_DEG;
+  const dx = (to.lng - from.lng) * M_PER_DEG * Math.cos(from.lat * (Math.PI / 180));
+  const bearing = ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
+  const sector = Math.round(bearing / 45) % 8;
+  const band = d <= 25 ? 'hot' : d <= 75 ? 'warm' : d <= 150 ? 'near' : d <= 300 ? 'far' : 'veryfar';
+  const range = { hot: 'under 25 m', warm: '25–75 m', near: '75–150 m', far: '150–300 m', veryfar: 'over 300 m' }[band];
+  return { dir: DIRECTIONS[sector], angle: sector * 45, band, range };
 }
 
 export function fmtDur(sec) {

@@ -4,6 +4,8 @@ import MapView from './MapView.jsx';
 
 const ROUND = [5, 10, 15, 20, 30, 45, 60, 90, 120, 180].map((m) => m * 60);
 const PING = [0, 1, 2, 3, 5, 10, 15, 20, 30].map((m) => m * 60);
+const FLASH_EVERY = [30, 45, 60, 90, 120, 180, 300];
+const FLASH_FOR = [2, 3, 5, 8];
 const HEAD = [0, 1, 2, 3, 5, 10, 15, 20, 30].map((m) => m * 60);
 const ZONE = [50, 75, 100, 150, 200, 300, 420, 500, 750, 1000, 1500]; // radius in metres
 
@@ -118,16 +120,34 @@ export default function HostSetup({ initial, submitLabel, onSubmit, onBack, busy
             value={s.visibility}
             onChange={(visibility) => set({ visibility })}
             options={[
-              ['live', '🛰️ Everyone live'],
-              ['pings', '📍 Chors hidden, pings'],
+              ['flash', '👀 Flash'],
+              ['pings', '📍 Pings'],
+              ['live', '🛰️ All live'],
             ]}
           />
           <p className="note" style={{ margin: '6px 0 0' }}>
-            {s.visibility === 'live'
-              ? 'Every player is on the map in real time. Pure chase: police catch a chor by getting within ' + CATCH_RADIUS_M + ' m.'
-              : 'Police only see where chors were at each ping. Chors never see police. Still caught within ' + CATCH_RADIUS_M + ' m.'}
+            {s.visibility === 'flash'
+              ? `Chors are hidden. Every ${fmtDur(s.flashEverySec)} police see them for ${s.flashForSec} seconds${s.hints ? ', with direction hints in between' : ''}. Recommended.`
+              : s.visibility === 'live'
+                ? `Every player is on the map in real time. Pure chase: easy for police.`
+                : `Police only see where chors were at each ping. Chors never see police.`}{' '}
+            Caught within {CATCH_RADIUS_M} m in every mode.
           </p>
         </div>
+        {s.visibility === 'flash' && (
+          <>
+            <StepSlider label="FLASH EVERY" steps={FLASH_EVERY} value={s.flashEverySec} fmt={fmtDur} onChange={(flashEverySec) => set({ flashEverySec })} />
+            <StepSlider label="CHORS VISIBLE FOR" steps={FLASH_FOR} value={s.flashForSec} fmt={(v) => `${v} seconds`} onChange={(flashForSec) => set({ flashForSec })} />
+            <label className="toggle rule">
+              <span>
+                Hints for police
+                <br />
+                <small className="note">Direction and rough distance to the nearest chor, every 15 s.</small>
+              </span>
+              <input type="checkbox" checked={s.hints} onChange={(e) => set({ hints: e.target.checked })} />
+            </label>
+          </>
+        )}
         {s.visibility === 'pings' && (
           <StepSlider label="PING EVERY" steps={PING} value={s.pingSec} fmt={(v) => (v ? fmtDur(v) : 'No pings')} onChange={(pingSec) => set({ pingSec })} />
         )}
